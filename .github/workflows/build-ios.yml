@@ -15,7 +15,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 22
 
       - name: Install dependencies
         working-directory: ./mobile
@@ -24,6 +24,10 @@ jobs:
       - name: Generate iOS project (Prebuild)
         working-directory: ./mobile
         run: npx expo prebuild -p ios --clean
+
+      - name: Fix Node path for Xcode
+        working-directory: ./mobile/ios
+        run: echo "export NODE_BINARY=$(command -v node)" > .xcode.env.local
 
       - name: Install CocoaPods
         working-directory: ./mobile/ios
@@ -37,6 +41,7 @@ jobs:
             -scheme mobile \
             -configuration Release \
             -sdk iphoneos \
+            -destination "generic/platform=iOS" \
             -derivedDataPath derived_data \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
