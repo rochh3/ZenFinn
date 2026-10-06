@@ -1,159 +1,115 @@
-import React from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, Alert } from 'react-native';
+import React, { useMemo } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
 import Animated, { FadeInDown } from 'react-native-reanimated';
-import { useTheme } from '../theme/ThemeProvider';
-import { Card } from '../components/Card';
-import { useApp } from '../context/AppContext';
-import { t } from '../config/i18n';
+import { useSettings, useStyles } from '../theme/SettingsContext';
+import { useAuth } from '../context/AuthContext';
+import { useData } from '../context/DataContext';
+import { Screen, Card, Button, SectionHeader, EmptyState, Icon, Banner } from '../components/ui';
+import { TransactionRow } from '../components/TransactionRow';
+import { formatMoney, friendlyDate } from '../utils/format';
+import { summarize } from '../utils/finance';
 
-export const Dashboard = ({ navigation }) => {
-  const { theme } = useTheme();
-  const styles = getStyles(theme);
-  const { user, transactions, balance, deleteTransaction, language } = useApp();
+const RECENT_DAYS = 8; // número de días con movimientos que se muestran en Inicio
 
-  const formatBalance = (num) => {
-    const sign = num >= 0 ? '' : '-';
-    return `${sign}${Math.abs(num).toFixed(2)} €`;
-  };
+export const Dashboard = () => {
+  const navigation = useNavigation();
+  const { t, theme, language } = useSettings();
+  const styles = useStyles(makeStyles);
+  const { profile } = useAuth();
+  const { transactions, categoriesById, loading, reload, offline } = useData();
 
-  const confirmDelete = (id) => {
-    Alert.alert(t('deleteTxTitle', language), t('deleteTxMsg', language), [
-      { text: t('cancel', language), style: 'cancel' },
-      { text: t('delete', language), style: 'destructive', onPress: () => deleteTransaction(id) }
-    ]);
-  };
+  const { total, month, groups } = useMemo(() => {
+    const now = new Date();
+    const prefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+    const all = summarize(transactions);
+    const thisMonth = summarize(transactions.filter((tx) => tx.date.startsWith(prefix)));
+    const byDay = [];
+    for (const tx of transactions) {
+      const last = byDay[byDay.length - 1];
+      if (last && last.date === tx.date) last.items.push(tx);
+      else if (byDay.length < RECENT_DAYS) byDay.push({ date: tx.date, items: [tx] });
+    }
+    return { total: all.net, month: thisMonth, groups: byDay };
+  }, [transactions]);
+
+  const openAdd = (type) => navigation.navigate('AddTransaction', { type });
+  const openTx = (id) => navigation.navigate('AddTransaction', { txId: id });
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.header}>{t('hello', language)}, {user?.name || 'Usuario'} 👋</Text>
+    <Screen onRefresh={() => reload()} refreshing={loading}>
+      {offline && <Banner text={t('offline')} />}
+      <Text style={styles.greeting}>{t('hello', { name: profile?.name || '' })} 👋</Text>
 
-      <View style={styles.balanceContainer}>
-        <Text style={styles.balanceLabel}>{t('currentBalance', language)}</Text>
-        <Text style={[styles.balanceAmount, { color: balance >= 0 ? theme.colors.text : theme.colors.danger }]}>
-          {formatBalance(balance)}
-        </Text>
+      <Animated.View entering={FadeInDown.springify().damping(16)}>
+        <View style={styles.hero}>
+          <Text style={styles.heroLabel}>{t('currentBalance')}</Text>
+          <Text style={styles.heroAmount} adjustsFontSizeToFit numberOfLines={1}>{formatMoney(total, language)}</Text>
+          <View style={styles.heroRow}>
+            <View style={styles.heroStat}>
+              <View style={[styles.heroIcon, { backgroundColor: 'rgba(255,255,255,0.22)' }]}><Icon name="arrow-down" size={16} color={theme.colors.onPrimary} /></View>
+              <View>
+                <Text style={styles.heroStatLabel}>{t('incomes')} · {t('thisMonth').toLowerCase()}</Text>
+                <Text style={styles.heroStatValue}>{formatMoney(month.income, language)}</Text>
+              </View>
+            </View>
+            <View style={styles.heroStat}>
+              <View style={[styles.heroIcon, { backgroundColor: 'rgba(255,255,255,0.22)' }]}><Icon name="arrow-up" size={16} color={theme.colors.onPrimary} /></View>
+              <View>
+                <Text style={styles.heroStatLabel}>{t('expenses')} · {t('thisMonth').toLowerCase()}</Text>
+                <Text style={styles.heroStatValue}>{formatMoney(month.expense, language)}</Text>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Animated.View>
+
+      <View style={styles.actions}>
+        <Button title={t('expense')} icon="remove-circle-outline" variant="secondary" onPress={() => openAdd('expense')} style={{ flex: 1, marginRight: 10 }} />
+        <Button title={t('income')} icon="add-circle-outline" variant="secondary" onPress={() => openAdd('income')} style={{ flex: 1 }} />
       </View>
 
-      <View style={styles.rowButtons}>
-        <TouchableOpacity
-          style={styles.actionButton}
-          onPress={() => navigation.navigate('Add')}
-        >
-          <Text style={styles.actionButtonText}>{t('addExpense', language)}</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.actionButton, { borderColor: theme.colors.success }]}
-          onPress={() => navigation.navigate('Add')}
-        >
-          <Text style={[styles.actionButtonText, { color: theme.colors.success }]}>{t('addIncome', language)}</Text>
-        </TouchableOpacity>
-      </View>
+      <SectionHeader title={t('recent')} />
 
-      <Text style={styles.sectionTitle}>{t('history', language)}</Text>
-
-      {transactions.length === 0 ? (
-        <Text style={styles.emptyText}>{t('noTransactions', language)}</Text>
+      {groups.length === 0 ? (
+        <Card><EmptyState icon="wallet-outline" title={t('noTransactions')} text={t('noTransactionsHint')} actionLabel={t('newTransaction')} onAction={() => openAdd('expense')} /></Card>
       ) : (
-        <FlatList
-          data={transactions}
-          keyExtractor={(item) => item.id}
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: theme.spacing.xxl }}
-          renderItem={({ item, index }) => (
-            <Animated.View entering={FadeInDown.delay(index * 60).springify().damping(14)}>
-              <TouchableOpacity onLongPress={() => confirmDelete(item.id)}>
-                <Card style={styles.transactionCard}>
-                  <View>
-                    <Text style={styles.txName}>{item.note || item.category || 'Transacción'}</Text>
-                    <Text style={styles.txDate}>{item.date}</Text>
+        groups.map((g) => {
+          const day = summarize(g.items);
+          return (
+            <View key={g.date} style={{ marginBottom: theme.spacing.l }}>
+              <View style={styles.dayHeader}>
+                <Text style={styles.dayTitle}>{friendlyDate(g.date, t, language)}</Text>
+                <Text style={styles.dayTotal}>{day.net >= 0 ? '+' : '−'}{formatMoney(Math.abs(day.net), language)}</Text>
+              </View>
+              <Card style={{ paddingVertical: theme.spacing.xs }}>
+                {g.items.map((tx, i) => (
+                  <View key={tx.id} style={i > 0 && styles.divider}>
+                    <TransactionRow tx={tx} category={categoriesById[tx.categoryId]} onPress={() => openTx(tx.id)} />
                   </View>
-                  <Text style={[
-                    styles.txAmount,
-                    { color: item.type === 'income' ? theme.colors.success : theme.colors.text }
-                  ]}>
-                    {item.type === 'income' ? '+' : '-'}{parseFloat(item.amount).toFixed(2)} €
-                  </Text>
-                </Card>
-              </TouchableOpacity>
-            </Animated.View>
-          )}
-        />
+                ))}
+              </Card>
+            </View>
+          );
+        })
       )}
-    </View>
+    </Screen>
   );
 };
 
-const getStyles = (theme) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-    paddingHorizontal: theme.spacing.l,
-  },
-  header: {
-    ...theme.typography.caption,
-    color: theme.colors.textSecondary,
-    marginTop: theme.spacing.xxl,
-    textAlign: 'center',
-    letterSpacing: 2,
-  },
-  balanceContainer: {
-    alignItems: 'center',
-    paddingVertical: theme.spacing.xxl,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-    marginBottom: theme.spacing.m,
-  },
-  balanceLabel: {
-    ...theme.typography.caption,
-    color: theme.colors.textSecondary,
-    marginBottom: theme.spacing.s,
-  },
-  balanceAmount: { ...theme.typography.h1 },
-  rowButtons: {
-    flexDirection: 'row',
-    gap: theme.spacing.m,
-    marginBottom: theme.spacing.l,
-  },
-  actionButton: {
-    flex: 1,
-    paddingVertical: theme.spacing.m,
-    borderRadius: theme.borderRadius.m,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    alignItems: 'center',
-  },
-  actionButtonText: {
-    ...theme.typography.caption,
-    color: theme.colors.text,
-    letterSpacing: 1,
-    fontWeight: '600',
-  },
-  sectionTitle: {
-    ...theme.typography.caption,
-    color: theme.colors.textSecondary,
-    marginBottom: theme.spacing.m,
-    letterSpacing: 2,
-  },
-  emptyText: {
-    ...theme.typography.caption,
-    color: theme.colors.textSecondary,
-    textAlign: 'center',
-    marginTop: theme.spacing.xxl,
-    opacity: 0.6,
-  },
-  transactionCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: theme.spacing.l,
-    borderWidth: 0,
-    borderBottomWidth: 1,
-    borderRadius: 0,
-    borderColor: theme.colors.border,
-    marginVertical: 0,
-    paddingHorizontal: 0,
-  },
-  txName: { ...theme.typography.body, color: theme.colors.text },
-  txDate: { ...theme.typography.caption, color: theme.colors.textSecondary, marginTop: 6 },
-  txAmount: { ...theme.typography.h2 },
+const makeStyles = (theme) => StyleSheet.create({
+  greeting: { ...theme.font.h1, color: theme.colors.text, marginBottom: theme.spacing.l },
+  hero: { backgroundColor: theme.colors.primary, borderRadius: theme.radius.xl, padding: theme.spacing.xl },
+  heroLabel: { ...theme.font.caption, color: theme.colors.onPrimary, opacity: 0.8, textTransform: 'uppercase' },
+  heroAmount: { ...theme.font.amountXL, color: theme.colors.onPrimary, marginTop: 4, marginBottom: theme.spacing.l },
+  heroRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  heroStat: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  heroIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginRight: 8 },
+  heroStatLabel: { fontSize: 11, color: theme.colors.onPrimary, opacity: 0.8, fontWeight: '600' },
+  heroStatValue: { ...theme.font.body, color: theme.colors.onPrimary, fontWeight: '800' },
+  actions: { flexDirection: 'row', marginTop: theme.spacing.l },
+  dayHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: theme.spacing.s, paddingHorizontal: 4 },
+  dayTitle: { ...theme.font.small, color: theme.colors.textSecondary, fontWeight: '700', textTransform: 'capitalize' },
+  dayTotal: { ...theme.font.small, color: theme.colors.textSecondary, fontWeight: '700' },
+  divider: { borderTopWidth: 1, borderTopColor: theme.colors.border },
 });

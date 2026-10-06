@@ -1,16 +1,16 @@
-name: Build iOS IPA
+name: Build Android APK
 
 on:
   # Manual: Actions > (este workflow) > Run workflow. Evita compilar en cada push.
   workflow_dispatch:
 
 concurrency:
-  group: build-ios-${{ github.ref }}
+  group: build-android-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-ios:
-    runs-on: macos-latest
+  build-android:
+    runs-on: ubuntu-latest
     env:
       # Se incrustan en la app al compilar (la anon key es pública; la protege RLS)
       EXPO_PUBLIC_SUPABASE_URL: ${{ secrets.EXPO_PUBLIC_SUPABASE_URL }}
@@ -39,46 +39,31 @@ jobs:
           cache: npm
           cache-dependency-path: mobile/package-lock.json
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Gradle (con caché)
+        uses: gradle/actions/setup-gradle@v4
+
       - name: Install dependencies
         working-directory: ./mobile
         run: npm install
 
-      - name: Generate iOS project (Prebuild)
+      - name: Generate Android project (Prebuild)
         working-directory: ./mobile
-        run: npx expo prebuild -p ios --clean
+        run: npx expo prebuild -p android --clean
 
-      - name: Fix Node path for Xcode
-        working-directory: ./mobile/ios
-        run: echo "export NODE_BINARY=$(command -v node)" > .xcode.env.local
+      - name: Build APK (release)
+        working-directory: ./mobile/android
+        # Expo firma la release con la clave de depuración: el APK se puede instalar directamente.
+        run: ./gradlew assembleRelease --no-daemon -PreactNativeArchitectures=arm64-v8a,armeabi-v7a
 
-      - name: Install CocoaPods
-        working-directory: ./mobile/ios
-        run: pod install
-
-      - name: Build unsigned iOS app (.app)
-        working-directory: ./mobile/ios
-        run: |
-          xcodebuild \
-            -workspace mobile.xcworkspace \
-            -scheme mobile \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination "generic/platform=iOS" \
-            -derivedDataPath derived_data \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGN_IDENTITY="" \
-            build
-
-      - name: Package into .ipa
-        working-directory: ./mobile/ios
-        run: |
-          mkdir -p Payload
-          mv derived_data/Build/Products/Release-iphoneos/mobile.app Payload/
-          zip -qr ZenFin.ipa Payload
-
-      - name: Upload Artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ZenFin-IPA
-          path: mobile/ios/ZenFin.ipa
+          name: ZenFin-APK
+          path: mobile/android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
