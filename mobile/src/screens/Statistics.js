@@ -1,193 +1,111 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
-import { useTheme } from '../theme/ThemeProvider';
-import { useApp } from '../context/AppContext';
-import { t } from '../config/i18n';
-
-const FILTERS = ['daily', 'monthly', 'quarterly', 'yearly'];
+import React, { useMemo, useState } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
+import { useSettings, useStyles } from '../theme/SettingsContext';
+import { useData } from '../context/DataContext';
+import { Screen, ScreenTitle, Card, Segmented, IconButton, EmptyState, SectionHeader } from '../components/ui';
+import { DonutChart, BarChart } from '../components/charts';
+import { formatMoney } from '../utils/format';
+import { getRange, periodLabel, inRange, summarize, byCategory, buildSeries } from '../utils/finance';
 
 export const StatisticsScreen = () => {
-  const { theme } = useTheme();
-  const styles = getStyles(theme);
-  const { transactions, categories, language } = useApp();
-  const [filter, setFilter] = useState('monthly');
-  const [offset, setOffset] = useState(0); // 0 = current, -1 = previous, etc.
+  const { t, theme, language } = useSettings();
+  const styles = useStyles(makeStyles);
+  const { transactions, categoriesById } = useData();
+  const [period, setPeriod] = useState('month');
+  const [offset, setOffset] = useState(0);
 
-  // Helper to change offset
-  const handleOffset = (delta) => setOffset(prev => prev + delta);
+  const range = useMemo(() => getRange(period, offset), [period, offset]);
+  const filtered = useMemo(() => transactions.filter((tx) => inRange(tx.date, range)), [transactions, range]);
+  const totals = useMemo(() => summarize(filtered), [filtered]);
+  const cats = useMemo(() => byCategory(filtered, categoriesById), [filtered, categoriesById]);
+  const series = useMemo(() => buildSeries(filtered, period, range, language), [filtered, period, range, language]);
 
-  // Change filter resets offset
-  const handleFilterChange = (f) => {
-    setFilter(f);
-    setOffset(0);
-  };
-
-  // Filter transactions by period
-  const baseDate = new Date();
-  
-  const filtered = transactions.filter(tx => {
-    const d = new Date(tx.date.split('/').reverse().join('-'));
-    if (isNaN(d.getTime())) return false; // invalid date safeguard
-
-    if (filter === 'daily') {
-      const target = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + offset);
-      return d.toDateString() === target.toDateString();
-    }
-    if (filter === 'monthly') {
-      const target = new Date(baseDate.getFullYear(), baseDate.getMonth() + offset, 1);
-      return d.getMonth() === target.getMonth() && d.getFullYear() === target.getFullYear();
-    }
-    if (filter === 'quarterly') {
-      const currentQ = Math.floor(baseDate.getMonth() / 3);
-      // Calculate target quarter handling year wrap
-      const targetMonthsOffset = offset * 3;
-      const targetDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + targetMonthsOffset, 1);
-      const targetQ = Math.floor(targetDate.getMonth() / 3);
-      return Math.floor(d.getMonth() / 3) === targetQ && d.getFullYear() === targetDate.getFullYear();
-    }
-    if (filter === 'yearly') {
-      const targetYear = baseDate.getFullYear() + offset;
-      return d.getFullYear() === targetYear;
-    }
-    return true;
-  });
-
-  // Display label for current period
-  const getPeriodLabel = () => {
-    if (offset === 0) return language === 'en' ? 'Current' : 'Actual';
-    if (filter === 'daily') {
-      const tDate = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + offset);
-      return tDate.toLocaleDateString();
-    }
-    if (filter === 'monthly') {
-      const tDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + offset, 1);
-      return `${tDate.getMonth() + 1}/${tDate.getFullYear()}`;
-    }
-    if (filter === 'quarterly') {
-      const tDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + (offset * 3), 1);
-      const q = Math.floor(tDate.getMonth() / 3) + 1;
-      return `Q${q} ${tDate.getFullYear()}`;
-    }
-    if (filter === 'yearly') {
-      return `${baseDate.getFullYear() + offset}`;
-    }
-    return '';
-  };
-
-  const expenses = filtered.filter(tx => tx.type === 'expense');
-  const income = filtered.filter(tx => tx.type === 'income');
-  const totalExpense = expenses.reduce((acc, tx) => acc + parseFloat(tx.amount), 0);
-  const totalIncome = income.reduce((acc, tx) => acc + parseFloat(tx.amount), 0);
-
-  // Group by category
-  const byCategory = categories.map(cat => {
-    const spent = expenses.filter(tx => tx.category === cat.name).reduce((acc, tx) => acc + parseFloat(tx.amount), 0);
-    return { ...cat, spent };
-  }).filter(c => c.spent > 0);
+  const palette = theme.colors.chart;
+  const colorOf = (item, i) => item.category?.color || palette[i % palette.length];
+  const donut = cats.map((c, i) => ({ value: c.value, color: colorOf(c, i) }));
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-      <Text style={styles.header}>{t('stats', language)}</Text>
+    <Screen>
+      <ScreenTitle title={t('stats')} />
+      <Segmented
+        value={period}
+        onChange={(p) => { setPeriod(p); setOffset(0); }}
+        options={[{ value: 'day', label: t('day') }, { value: 'month', label: t('month') }, { value: 'quarter', label: t('quarter') }, { value: 'year', label: t('year') }]}
+      />
 
-      {/* Filter bar */}
-      <View style={styles.filterContainer}>
-        {FILTERS.map((f) => (
-          <TouchableOpacity key={f} onPress={() => handleFilterChange(f)}>
-            <Text style={[styles.filterText, filter === f && styles.filterTextActive]}>{t(f, language).toUpperCase()}</Text>
-          </TouchableOpacity>
-        ))}
+      <View style={styles.nav}>
+        <IconButton name="chevron-back" onPress={() => setOffset(offset - 1)} />
+        <Text style={styles.navLabel}>{periodLabel(period, range, language)}</Text>
+        <IconButton name="chevron-forward" onPress={() => offset < 0 && setOffset(offset + 1)} color={offset >= 0 ? theme.colors.border : undefined} />
       </View>
 
-      {/* Period Navigator */}
-      <View style={styles.periodNav}>
-        <TouchableOpacity onPress={() => handleOffset(-1)} style={styles.arrowBtn}>
-          <Text style={styles.arrowText}>←</Text>
-        </TouchableOpacity>
-        <Text style={styles.periodLabel}>{getPeriodLabel()}</Text>
-        <TouchableOpacity onPress={() => handleOffset(1)} style={styles.arrowBtn}>
-          <Text style={styles.arrowText}>→</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Summary cards */}
       <View style={styles.summaryRow}>
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryLabel}>{language === 'en' ? 'EXPENSES' : 'GASTOS'}</Text>
-          <Text style={[styles.summaryAmount, { color: theme.colors.danger }]}>{totalExpense.toFixed(2)} €</Text>
-        </View>
-        <View style={styles.summaryCard}>
-          <Text style={styles.summaryLabel}>{language === 'en' ? 'INCOME' : 'INGRESOS'}</Text>
-          <Text style={[styles.summaryAmount, { color: theme.colors.success }]}>{totalIncome.toFixed(2)} €</Text>
-        </View>
+        <Card style={[styles.summaryCard, { marginRight: 8 }]}>
+          <Text style={styles.summaryLabel}>{t('incomes')}</Text>
+          <Text style={[styles.summaryValue, { color: theme.colors.success }]} numberOfLines={1} adjustsFontSizeToFit>{formatMoney(totals.income, language)}</Text>
+        </Card>
+        <Card style={[styles.summaryCard, { marginLeft: 8 }]}>
+          <Text style={styles.summaryLabel}>{t('expenses')}</Text>
+          <Text style={[styles.summaryValue, { color: theme.colors.danger }]} numberOfLines={1} adjustsFontSizeToFit>{formatMoney(totals.expense, language)}</Text>
+        </Card>
       </View>
-
-      {/* Chart */}
-      {(totalExpense > 0 || totalIncome > 0) && (
-        <View style={styles.chartContainer}>
-          <View style={styles.barWrapper}>
-            <View style={[styles.bar, { height: `${Math.max((totalExpense / (totalExpense + totalIncome)) * 100, 5)}%`, backgroundColor: theme.colors.danger }]} />
-            <Text style={styles.barLabel}>{language === 'en' ? 'Exp.' : 'Gas.'}</Text>
-          </View>
-          <View style={styles.barWrapper}>
-            <View style={[styles.bar, { height: `${Math.max((totalIncome / (totalExpense + totalIncome)) * 100, 5)}%`, backgroundColor: theme.colors.success }]} />
-            <Text style={styles.barLabel}>{language === 'en' ? 'Inc.' : 'Ing.'}</Text>
-          </View>
-        </View>
-      )}
-
-      {/* By category */}
-      <Text style={styles.sectionTitle}>{language === 'en' ? 'BY CATEGORY' : 'POR CATEGORÍA'}</Text>
-
-      {byCategory.length === 0 ? (
-        <Text style={styles.emptyText}>
-          {transactions.length === 0
-            ? (language === 'en' ? 'Add transactions to see stats' : 'Añade transacciones para ver estadísticas')
-            : (language === 'en' ? 'No expenses in this period' : 'Sin gastos en este período')}
+      <Card tone="alt" style={styles.netCard}>
+        <Text style={styles.summaryLabel}>{t('net')}</Text>
+        <Text style={[styles.netValue, { color: totals.net >= 0 ? theme.colors.success : theme.colors.danger }]}>
+          {totals.net >= 0 ? '+' : '−'}{formatMoney(Math.abs(totals.net), language)}
         </Text>
+      </Card>
+
+      {filtered.length === 0 ? (
+        <Card style={{ marginTop: theme.spacing.l }}><EmptyState icon="stats-chart-outline" title={t('noData')} /></Card>
       ) : (
-        byCategory.map(cat => {
-          const pct = totalExpense > 0 ? ((cat.spent / totalExpense) * 100).toFixed(0) : 0;
-          return (
-            <View key={cat.id} style={styles.catRow}>
-              <View style={styles.catRowHeader}>
-                <Text style={styles.catName}>{cat.icon} {cat.name}</Text>
-                <Text style={styles.catAmount}>{cat.spent.toFixed(2)} €  <Text style={{ color: theme.colors.textSecondary }}>{pct}%</Text></Text>
-              </View>
-              <View style={styles.progressTrack}>
-                <View style={[styles.progressFill, { width: `${pct}%`, backgroundColor: cat.color }]} />
-              </View>
-            </View>
-          );
-        })
+        <>
+          {series.length > 0 && (
+            <>
+              <SectionHeader title={t('evolution')} />
+              <Card><BarChart data={series} /></Card>
+            </>
+          )}
+
+          {cats.length > 0 && (
+            <>
+              <SectionHeader title={t('byCategory')} />
+              <Card>
+                <View style={{ alignItems: 'center', marginBottom: theme.spacing.l }}>
+                  <DonutChart data={donut} centerTop={t('expenses')} centerBottom={formatMoney(totals.expense, language, { compact: true })} />
+                </View>
+                {cats.map((c, i) => {
+                  const pct = totals.expense > 0 ? (c.value / totals.expense) * 100 : 0;
+                  return (
+                    <View key={c.id} style={styles.legendRow}>
+                      <View style={[styles.legendDot, { backgroundColor: colorOf(c, i) }]} />
+                      <Text style={styles.legendName} numberOfLines={1}>{c.category ? `${c.category.icon} ${c.category.name}` : t('noCategory')}</Text>
+                      <Text style={styles.legendPct}>{pct.toFixed(0)}%</Text>
+                      <Text style={styles.legendValue}>{formatMoney(c.value, language)}</Text>
+                    </View>
+                  );
+                })}
+              </Card>
+            </>
+          )}
+        </>
       )}
-    </ScrollView>
+    </Screen>
   );
 };
 
-const getStyles = (theme) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.background, paddingHorizontal: theme.spacing.l },
-  header: { ...theme.typography.caption, color: theme.colors.textSecondary, marginTop: theme.spacing.xxl, marginBottom: theme.spacing.m, textAlign: 'center', letterSpacing: 4 },
-  filterContainer: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: theme.spacing.m, borderBottomWidth: 1, borderBottomColor: theme.colors.border },
-  periodNav: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: theme.spacing.m, marginBottom: theme.spacing.l },
-  arrowBtn: { padding: theme.spacing.s },
-  arrowText: { color: theme.colors.primary, fontSize: 18, fontWeight: 'bold' },
-  periodLabel: { ...theme.typography.body, color: theme.colors.text, fontWeight: '600' },
-  filterText: { ...theme.typography.caption, color: theme.colors.textSecondary },
-  filterTextActive: { color: theme.colors.primary, fontWeight: '600' },
-  summaryRow: { flexDirection: 'row', gap: theme.spacing.m, marginBottom: theme.spacing.xl },
-  summaryCard: { flex: 1, backgroundColor: theme.colors.surface, padding: theme.spacing.l, borderRadius: theme.borderRadius.m, borderWidth: 1, borderColor: theme.colors.border },
-  summaryLabel: { ...theme.typography.caption, color: theme.colors.textSecondary, marginBottom: theme.spacing.s },
-  summaryAmount: { ...theme.typography.h2 },
-  chartContainer: { flexDirection: 'row', justifyContent: 'center', height: 150, marginBottom: theme.spacing.xl, alignItems: 'flex-end', gap: 40 },
-  barWrapper: { alignItems: 'center', height: '100%', justifyContent: 'flex-end' },
-  bar: { width: 40, borderTopLeftRadius: 6, borderTopRightRadius: 6 },
-  barLabel: { ...theme.typography.caption, color: theme.colors.textSecondary, marginTop: 8 },
-  sectionTitle: { ...theme.typography.caption, color: theme.colors.textSecondary, letterSpacing: 2, marginBottom: theme.spacing.m },
-  emptyText: { ...theme.typography.caption, color: theme.colors.textSecondary, opacity: 0.5, textAlign: 'center', marginTop: theme.spacing.xxl },
-  catRow: { marginBottom: theme.spacing.l },
-  catRowHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: theme.spacing.s },
-  catName: { ...theme.typography.body, color: theme.colors.text },
-  catAmount: { ...theme.typography.caption, color: theme.colors.text },
-  progressTrack: { height: 4, backgroundColor: theme.colors.border, borderRadius: 2, overflow: 'hidden' },
-  progressFill: { height: '100%', borderRadius: 2 },
+const makeStyles = (theme) => StyleSheet.create({
+  nav: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginVertical: theme.spacing.m },
+  navLabel: { ...theme.font.h2, color: theme.colors.text, textTransform: 'capitalize' },
+  summaryRow: { flexDirection: 'row' },
+  summaryCard: { flex: 1 },
+  summaryLabel: { ...theme.font.caption, color: theme.colors.textSecondary, textTransform: 'uppercase' },
+  summaryValue: { ...theme.font.h1, marginTop: 6 },
+  netCard: { marginTop: theme.spacing.m, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  netValue: { ...theme.font.h1 },
+  legendRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10 },
+  legendDot: { width: 12, height: 12, borderRadius: 6, marginRight: 10 },
+  legendName: { ...theme.font.body, color: theme.colors.text, flex: 1, fontWeight: '600' },
+  legendPct: { ...theme.font.small, color: theme.colors.textSecondary, width: 44, textAlign: 'right' },
+  legendValue: { ...theme.font.body, color: theme.colors.text, width: 96, textAlign: 'right', fontWeight: '700' },
 });

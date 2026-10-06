@@ -1,103 +1,105 @@
+const crypto = require('crypto');
 const express = require('express');
-const router = express.Router();
-const supabase = require('../config/supabase');
-const { processTransactionText } = require('../services/geminiService');
+const { adminClient } = require('../config/supabase');
+const { parseTransactionText } = require('../services/aiService');
 const { sendWhatsAppReply } = require('../services/whatsappService');
 
-// ─── Webhook Verification ──────────────────────────────────────────────────
-router.get('/', (req, res) => {
-  const verify_token = process.env.VERIFY_TOKEN;
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
+const router = express.Router();
 
-  if (mode === 'subscribe' && token === verify_token) {
-    console.log('✅ WEBHOOK VERIFIED');
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
+const safeEqual = (a, b) => {
+  const ba = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ba.length === bb.length && crypto.timingSafeEqual(ba, bb);
+};
+
+/** Verifica la firma X-Hub-Signature-256 que Meta añade a cada petición. */
+const verifySignature = (req, res, next) => {
+  const secret = process.env.WHATSAPP_APP_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('WHATSAPP_APP_SECRET no configurado: webhook rechazado');
+      return res.sendStatus(500);
+    }
+    console.warn('⚠️  WHATSAPP_APP_SECRET no configurado: firma sin verificar (solo desarrollo)');
+    return next();
   }
+  const header = req.headers['x-hub-signature-256'] || '';
+  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(req.rawBody || '').digest('hex');
+  if (!safeEqual(header, expected)) return res.sendStatus(403);
+  next();
+};
+
+router.get('/', (req, res) => {
+  const { 'hub.mode': mode, 'hub.verify_token': token, 'hub.challenge': challenge } = req.query;
+  if (mode === 'subscribe' && process.env.VERIFY_TOKEN && token === process.env.VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  res.sendStatus(403);
 });
 
-// ─── Receive WhatsApp Messages ─────────────────────────────────────────────
-router.post('/', async (req, res) => {
-  // Always respond 200 immediately so Meta doesn't retry
-  res.sendStatus(200);
+router.post('/', verifySignature, async (req, res) => {
+  res.sendStatus(200); // Meta reintenta si no respondemos rápido
 
   try {
-    const entry = req.body?.entry?.[0];
-    const change = entry?.changes?.[0];
-    const message = change?.value?.messages?.[0];
+    if (!adminClient) throw new Error('SUPABASE_SERVICE_ROLE_KEY no configurada');
 
+    const change = req.body?.entry?.[0]?.changes?.[0];
+    const message = change?.value?.messages?.[0];
     if (!message || message.type !== 'text') return;
 
-    const from = message.from; // Sender's phone number
-    const text = message.text.body;
+    const from = message.from;
+    const text = String(message.text?.body || '').slice(0, 500);
     const phoneNumberId = change.value.metadata.phone_number_id;
 
-    console.log(`📱 Message from ${from}: "${text}"`);
-
-    // 1. Find the user in Supabase by their WhatsApp number
-    const { data: userData, error: userError } = await supabase
+    const { data: profile } = await adminClient
       .from('users')
-      .select('*')
+      .select('id')
       .eq('whatsapp_number', from)
-      .single();
+      .maybeSingle();
 
-    if (userError || !userData) {
-      console.log(`⚠️  No user found for number ${from}`);
-      await sendWhatsAppReply(phoneNumberId, from,
-        '❌ Tu número de WhatsApp no está vinculado a ninguna cuenta de ZenFinance. Abre la app y vincúlalo en tu perfil.'
+    if (!profile) {
+      await sendWhatsAppReply(
+        phoneNumberId,
+        from,
+        '❌ Tu número no está vinculado a ninguna cuenta de ZenFin. Abre la app → Perfil → WhatsApp y añádelo.'
       );
       return;
     }
 
-    // 2. Get user's categories from Supabase for context
-    const { data: categories } = await supabase
+    const { data: categories } = await adminClient
       .from('categories')
-      .select('*')
-      .eq('couple_group_id', userData.couple_group_id)
+      .select('id,name')
+      .eq('user_id', profile.id)
       .eq('is_active', true);
 
-    // 3. Process text with Gemini AI
-    const parsed = await processTransactionText(text, categories || []);
+    const parsed = await parseTransactionText(text, (categories || []).map((c) => c.name));
 
-    // 4. Save transaction to Supabase
-    const { data: tx, error: txError } = await supabase
-      .from('transactions')
-      .insert([{
-        user_id: userData.id,
-        couple_group_id: userData.couple_group_id,
-        category_id: parsed.category_id,
-        amount: parsed.amount,
-        transaction_type: parsed.transaction_type,
+    if (!parsed.is_transaction) {
+      await sendWhatsAppReply(phoneNumberId, from, `🤔 ${parsed.message}`);
+      return;
+    }
+
+    const lines = [];
+    for (const tx of parsed.transactions) {
+      const category = (categories || []).find((c) => c.name === tx.category);
+      const { error } = await adminClient.from('transactions').insert({
+        user_id: profile.id,
+        category_id: category?.id ?? null,
+        amount: tx.amount,
+        transaction_type: tx.type,
         recurrence_type: 'variable',
-        date: parsed.date,
-        note: parsed.note,
+        date: tx.date,
+        note: tx.note,
         source: 'whatsapp',
-      }])
-      .select()
-      .single();
+      });
+      if (error) throw error;
+      lines.push(`${tx.type === 'expense' ? '💸' : '💰'} ${tx.note || '—'} · ${tx.amount.toFixed(2)} € · ${category?.name || 'Sin categoría'} · ${tx.date}`);
+    }
 
-    if (txError) throw txError;
-
-    // 5. Reply confirming the transaction
-    const emoji = parsed.transaction_type === 'expense' ? '💸' : '💰';
-    const typeLabel = parsed.transaction_type === 'expense' ? 'Gasto' : 'Ingreso';
-    const catName = categories?.find(c => c.id === parsed.category_id)?.name || 'Sin categoría';
-
-    const reply = `${emoji} *${typeLabel} registrado*\n\n` +
-      `📝 ${parsed.note}\n` +
-      `💶 ${parsed.amount.toFixed(2)} €\n` +
-      `📂 ${catName}\n` +
-      `📅 ${parsed.date}\n\n` +
-      `_Añadido automáticamente en ZenFinance ✦_`;
-
-    await sendWhatsAppReply(phoneNumberId, from, reply);
-    console.log(`✅ Transaction saved for user ${userData.id}: ${parsed.amount}€`);
-
+    const title = lines.length === 1 ? 'Registrado' : `${lines.length} movimientos registrados`;
+    await sendWhatsAppReply(phoneNumberId, from, ['✅ *' + title + '*', '', ...lines].join(String.fromCharCode(10)));
   } catch (err) {
-    console.error('❌ Webhook processing error:', err.message);
+    console.error('Webhook error:', err.message);
   }
 });
 

@@ -1,69 +1,42 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { chatTurn } = require('../services/aiService');
+const { isIsoDate } = require('../utils/validate');
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const MAX_HISTORY = 12;
+const MAX_CHARS = 1000;
 
-/**
- * Chat endpoint - processes a free-form message and returns a response
- * with optional transaction data extracted by Gemini
- */
 async function chat(req, res) {
-  const { message, categories = [] } = req.body;
+  const { messages, categories, today } = req.body || {};
 
-  if (!message?.trim()) {
-    return res.status(400).json({ error: 'Message is required' });
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return res.status(400).json({ error: 'messages es obligatorio' });
   }
 
-  const catList = categories.map(c => c.name).join(', ') || 'General';
+  const history = messages
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim())
+    .slice(-MAX_HISTORY)
+    .map((m) => ({ role: m.role, content: m.content.slice(0, MAX_CHARS) }));
 
-  const prompt = `Eres un asistente financiero personal para la app ZenFinance. El usuario te enviará mensajes en lenguaje natural describiendo gastos o ingresos.
+  if (!history.length || history[history.length - 1].role !== 'user') {
+    return res.status(400).json({ error: 'El último mensaje debe ser del usuario' });
+  }
 
-Tu tarea:
-1. Identificar si el mensaje describe una transacción financiera.
-2. Si es una transacción, extraer los datos y responder en JSON estructurado.
-3. Si NO es una transacción, responde como asistente financiero amigable en español.
-
-Categorías disponibles del usuario: ${catList}
-
-Responde SIEMPRE en este formato JSON exacto si detectas una transacción:
-{
-  "is_transaction": true,
-  "transaction": {
-    "type": "expense" or "income",
-    "amount": <número>,
-    "note": "<descripción corta>",
-    "category": "<categoría de la lista o la más cercana>"
-  },
-  "message": "<mensaje amigable confirmando lo registrado, en español, máximo 2 frases>"
-}
-
-Si NO es una transacción, responde:
-{
-  "is_transaction": false,
-  "message": "<tu respuesta como asistente financiero, en español>"
-}
-
-Devuelve ÚNICAMENTE el JSON sin markdown ni explicaciones.
-Mensaje del usuario: "${message}"`;
+  const categoryNames = (Array.isArray(categories) ? categories : [])
+    .filter((c) => typeof c === 'string' && c.trim())
+    .slice(0, 50)
+    .map((c) => c.slice(0, 40));
 
   try {
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    const result = await model.generateContent(prompt);
-    const rawText = result.response.text().replace(/```json/g, '').replace(/```/g, '').trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(rawText);
-    } catch {
-      parsed = { is_transaction: false, message: rawText };
-    }
-
-    res.json(parsed);
+    const result = await chatTurn({
+      history,
+      categoryNames,
+      today: isIsoDate(today) ? today : undefined,
+    });
+    res.json(result);
   } catch (err) {
-    console.error('Gemini chat error:', err.message);
-    res.status(500).json({
+    console.error('Chat IA error:', err?.response?.data || err.message);
+    res.status(502).json({
       is_transaction: false,
-      message: 'Error al procesar con IA. Comprueba la clave de API de Gemini.',
-      error: err.message,
+      message: 'La IA no está disponible ahora mismo. Inténtalo de nuevo en un momento.',
     });
   }
 }

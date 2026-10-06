@@ -1,67 +1,64 @@
 import React from 'react';
+import { View, TouchableOpacity } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Dashboard } from '../screens/Dashboard';
-import { Categories } from '../screens/Categories';
-import { AddTransaction } from '../screens/AddTransaction';
-import { CalendarScreen } from '../screens/Calendar';
-import { AccountScreen } from '../screens/Account';
-import { useTheme } from '../theme/ThemeProvider';
-import { useApp } from '../context/AppContext';
-import { t } from '../config/i18n';
+import { StatisticsScreen } from '../screens/Statistics';
+import { ChatScreen } from '../screens/ChatScreen';
+import { MoreStack } from './MoreStack';
+import { Icon } from '../components/ui';
+import { useSettings } from '../theme/SettingsContext';
 
 const Tab = createBottomTabNavigator();
 
+const Placeholder = () => null;
+
+const AddButton = ({ onPress }) => {
+  const { theme } = useSettings();
+  return (
+    <View style={{ flex: 1, alignItems: 'center' }}>
+      <TouchableOpacity
+        onPress={onPress}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        style={{
+          top: -14, width: 58, height: 58, borderRadius: 29, backgroundColor: theme.colors.primary,
+          alignItems: 'center', justifyContent: 'center',
+          shadowColor: theme.colors.primary, shadowOpacity: 0.45, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 8,
+        }}
+      >
+        <Icon name="add" size={32} color={theme.colors.onPrimary} />
+      </TouchableOpacity>
+    </View>
+  );
+};
+
 export const TabNavigator = () => {
-  const { theme } = useTheme();
-  const { language } = useApp();
+  const { theme, t } = useSettings();
+  const icon = (active, inactive) => ({ color, focused }) => <Icon name={focused ? active : inactive} size={24} color={color} />;
+
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarStyle: {
-          backgroundColor: theme.colors.surface,
-          borderTopWidth: 1,
-          borderTopColor: theme.colors.border,
-          paddingTop: 8,
-        },
         tabBarActiveTintColor: theme.colors.primary,
         tabBarInactiveTintColor: theme.colors.textSecondary,
-        tabBarLabelStyle: {
-          ...theme.typography.caption,
-          fontSize: 9,
-          marginBottom: 4,
-          letterSpacing: 1,
-        },
+        tabBarStyle: { backgroundColor: theme.colors.surface, borderTopColor: theme.colors.border },
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
       }}
     >
-      <Tab.Screen 
-        name="Dashboard" 
-        component={Dashboard} 
-        options={{ title: t('dashboard', language) }}
+      <Tab.Screen name="Dashboard" component={Dashboard} options={{ title: t('tabHome'), tabBarIcon: icon('home', 'home-outline') }} />
+      <Tab.Screen name="Statistics" component={StatisticsScreen} options={{ title: t('tabStats'), tabBarIcon: icon('pie-chart', 'pie-chart-outline') }} />
+      <Tab.Screen
+        name="AddTab"
+        component={Placeholder}
+        options={({ navigation }) => ({
+          title: t('tabAdd'),
+          tabBarLabel: () => null,
+          tabBarButton: () => <AddButton onPress={() => navigation.getParent().navigate('AddTransaction')} />,
+        })}
       />
-      <Tab.Screen 
-        name="Calendar" 
-        component={CalendarScreen} 
-        options={{ title: t('calendar', language) }}
-      />
-      <Tab.Screen 
-        name="Add" 
-        component={AddTransaction} 
-        options={{ 
-          title: t('addTransaction', language),
-          tabBarLabelStyle: { color: theme.colors.primary, ...theme.typography.caption, fontSize: 9 }
-        }}
-      />
-      <Tab.Screen 
-        name="Categories" 
-        component={Categories} 
-        options={{ title: t('categories', language) }} 
-      />
-      <Tab.Screen 
-        name="Account" 
-        component={AccountScreen} 
-        options={{ title: t('profile', language) }}
-      />
+      <Tab.Screen name="Chat" component={ChatScreen} options={{ title: t('tabAssistant'), tabBarIcon: icon('sparkles', 'sparkles-outline') }} />
+      <Tab.Screen name="More" component={MoreStack} options={{ title: t('tabMore'), tabBarIcon: icon('grid', 'grid-outline') }} />
     </Tab.Navigator>
   );
 };

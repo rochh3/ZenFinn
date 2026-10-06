@@ -1,193 +1,120 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert } from 'react-native';
-import Animated, { FadeInUp } from 'react-native-reanimated';
-import { useTheme } from '../theme/ThemeProvider';
-import { useApp } from '../context/AppContext';
+import { View, Text, TextInput, StyleSheet, KeyboardAvoidingView, Platform, TouchableOpacity } from 'react-native';
+import { Alert } from '../utils/alert';
+import { useSettings, useStyles } from '../theme/SettingsContext';
+import { useData } from '../context/DataContext';
+import { Screen, Button, Chip, Label, Field, IconButton, Segmented, Icon } from '../components/ui';
+import { todayISO, addDays, friendlyDate, parseAmount } from '../utils/format';
 
-export const AddTransaction = ({ navigation }) => {
-  const { theme } = useTheme();
-  const styles = getStyles(theme);
-  const { addTransaction, categories } = useApp();
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
-  const [type, setType] = useState('expense');
-  const [selectedCategory, setSelectedCategory] = useState(null);
+export const AddTransaction = ({ navigation, route }) => {
+  const { t, theme, language } = useSettings();
+  const styles = useStyles(makeStyles);
+  const { transactions, activeCategories, categoriesById, addTransaction, updateTransaction, deleteTransaction } = useData();
 
-  const handleSave = () => {
-    if (!amount || isNaN(parseFloat(amount))) {
-      Alert.alert('Error', 'Introduce un importe válido');
-      return;
+  const editing = route.params?.txId ? transactions.find((x) => x.id === route.params.txId) : null;
+  const [type, setType] = useState(editing?.type || route.params?.type || 'expense');
+  const [amount, setAmount] = useState(editing ? String(editing.amount).replace('.', ',') : '');
+  const [note, setNote] = useState(editing?.note || '');
+  const [categoryId, setCategoryId] = useState(editing?.categoryId || null);
+  const [date, setDate] = useState(editing?.date || todayISO());
+  const [busy, setBusy] = useState(false);
+
+  const isIncome = type === 'income';
+  const tint = isIncome ? theme.colors.success : theme.colors.danger;
+  // Si la categoría del movimiento está archivada, se sigue mostrando para no perderla al editar.
+  const options = editing?.categoryId && !activeCategories.some((c) => c.id === editing.categoryId) && categoriesById[editing.categoryId]
+    ? [...activeCategories, categoriesById[editing.categoryId]] : activeCategories;
+
+  const save = async () => {
+    const value = parseAmount(amount);
+    if (isNaN(value)) return Alert.alert(t('error'), t('invalidAmount'));
+    setBusy(true);
+    try {
+      const payload = { amount: value, type, note: note.trim(), categoryId, date };
+      if (editing) await updateTransaction(editing.id, payload);
+      else await addTransaction(payload);
+      navigation.goBack();
+    } catch (e) {
+      Alert.alert(t('error'), e.message);
+      setBusy(false);
     }
-    addTransaction({
-      amount: parseFloat(amount),
-      note: note.trim(),
-      type,
-      category: selectedCategory?.name || 'Sin categoría',
-      categoryColor: selectedCategory?.color,
-    });
-    Alert.alert('✓ Guardado', 'Transacción añadida correctamente', [
-      { text: 'OK', onPress: () => navigation.navigate('Dashboard') }
-    ]);
   };
 
+  const remove = () =>
+    Alert.alert(t('deleteTxTitle'), t('deleteTxMsg'), [
+      { text: t('cancel'), style: 'cancel' },
+      { text: t('delete'), style: 'destructive', onPress: async () => { try { await deleteTransaction(editing.id); navigation.goBack(); } catch (e) { Alert.alert(t('error'), e.message); } } },
+    ]);
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.header}>NUEVA TRANSACCIÓN</Text>
+    <Screen edges={['top', 'bottom']}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <View style={styles.header}>
+          <Text style={styles.title}>{editing ? t('editTransaction') : t('newTransaction')}</Text>
+          <IconButton name="close" onPress={() => navigation.goBack()} />
+        </View>
 
-      <Animated.View entering={FadeInUp.delay(100)} style={styles.typeSelector}>
-        <TouchableOpacity
-          style={[styles.typeButton, type === 'expense' && styles.typeButtonActive]}
-          onPress={() => setType('expense')}
-        >
-          <Text style={[styles.typeText, type === 'expense' && styles.typeTextActive]}>GASTO</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.typeButton, type === 'income' && styles.typeButtonActive]}
-          onPress={() => setType('income')}
-        >
-          <Text style={[styles.typeText, type === 'income' && styles.typeTextActive]}>INGRESO</Text>
-        </TouchableOpacity>
-      </Animated.View>
-
-      <Animated.View entering={FadeInUp.delay(200)} style={styles.inputContainer}>
-        <Text style={styles.label}>IMPORTE</Text>
-        <TextInput
-          style={styles.amountInput}
-          placeholder="0.00 €"
-          placeholderTextColor={theme.colors.textSecondary}
-          keyboardType="numeric"
-          value={amount}
-          onChangeText={setAmount}
+        <Segmented
+          value={type}
+          onChange={setType}
+          options={[{ value: 'expense', label: t('expense') }, { value: 'income', label: t('income') }]}
         />
-      </Animated.View>
 
-      <Animated.View entering={FadeInUp.delay(300)} style={styles.inputContainer}>
-        <Text style={styles.label}>NOTA (OPCIONAL)</Text>
-        <TextInput
-          style={styles.textInput}
-          placeholder="¿En qué lo gastaste?"
-          placeholderTextColor={theme.colors.textSecondary}
-          value={note}
-          onChangeText={setNote}
-        />
-      </Animated.View>
+        <View style={styles.amountBox}>
+          <TextInput
+            style={[styles.amountInput, { color: tint }]}
+            value={amount}
+            onChangeText={setAmount}
+            placeholder="0,00"
+            placeholderTextColor={theme.colors.textSecondary}
+            keyboardType="decimal-pad"
+            autoFocus={!editing}
+            selectionColor={tint}
+            maxLength={12}
+          />
+          <Text style={[styles.currency, { color: tint }]}>€</Text>
+        </View>
 
-      <Animated.View entering={FadeInUp.delay(400)} style={styles.inputContainer}>
-        <Text style={styles.label}>CATEGORÍA</Text>
-        {categories.length === 0 ? (
-          <TouchableOpacity
-            style={styles.categorySelect}
-            onPress={() => navigation.navigate('Categories')}
-          >
-            <Text style={styles.categorySelectText}>Crea primero una categoría →</Text>
-          </TouchableOpacity>
+        <Label>{t('category')}</Label>
+        {options.length === 0 ? (
+          <Button title={t('createCategoryFirst')} variant="secondary" onPress={() => navigation.navigate('Main', { screen: 'More', params: { screen: 'Categories' } })} style={{ marginBottom: theme.spacing.l }} />
         ) : (
-          <View style={styles.categoryGrid}>
-            {categories.map(cat => (
-              <TouchableOpacity
-                key={cat.id}
-                style={[
-                  styles.catChip,
-                  selectedCategory?.id === cat.id && { borderColor: cat.color, backgroundColor: cat.color + '20' }
-                ]}
-                onPress={() => setSelectedCategory(cat)}
-              >
-                <Text style={styles.catChipText}>{cat.icon} {cat.name}</Text>
-              </TouchableOpacity>
+          <View style={styles.chips}>
+            {options.map((c) => (
+              <Chip key={c.id} icon={c.icon} label={c.name} color={c.color} active={categoryId === c.id} onPress={() => setCategoryId(categoryId === c.id ? null : c.id)} />
             ))}
           </View>
         )}
-      </Animated.View>
 
-      <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-        <Text style={styles.saveButtonText}>GUARDAR TRANSACCIÓN</Text>
-      </TouchableOpacity>
-    </View>
+        <Label style={{ marginTop: theme.spacing.s }}>{t('date')}</Label>
+        <View style={styles.dateRow}>
+          <IconButton name="chevron-back" onPress={() => setDate(addDays(date, -1))} />
+          <View style={{ alignItems: 'center' }}>
+            <Text style={styles.dateText}>{friendlyDate(date, t, language)}</Text>
+            {date !== todayISO() && (
+              <TouchableOpacity onPress={() => setDate(todayISO())}><Text style={styles.todayLink}>{t('today')}</Text></TouchableOpacity>
+            )}
+          </View>
+          <IconButton name="chevron-forward" onPress={() => date < todayISO() && setDate(addDays(date, 1))} color={date >= todayISO() ? theme.colors.border : undefined} />
+        </View>
+
+        <Field label={t('note')} value={note} onChangeText={setNote} placeholder={t('notePlaceholder')} maxLength={80} style={{ marginTop: theme.spacing.xl }} />
+
+        <Button title={t('saveTransaction')} onPress={save} loading={busy} />
+        {editing && <Button title={t('delete')} variant="danger" icon="trash-outline" onPress={remove} style={{ marginTop: theme.spacing.m }} />}
+      </KeyboardAvoidingView>
+    </Screen>
   );
 };
 
-const getStyles = (theme) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: theme.colors.background,
-    paddingHorizontal: theme.spacing.l,
-    paddingTop: theme.spacing.xxl,
-  },
-  header: {
-    ...theme.typography.caption,
-    color: theme.colors.primary,
-    textAlign: 'center',
-    letterSpacing: 4,
-    marginBottom: theme.spacing.xl,
-  },
-  typeSelector: {
-    flexDirection: 'row',
-    backgroundColor: theme.colors.surface,
-    borderRadius: theme.borderRadius.l,
-    padding: 4,
-    marginBottom: theme.spacing.xl,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  typeButton: {
-    flex: 1,
-    paddingVertical: theme.spacing.m,
-    alignItems: 'center',
-    borderRadius: theme.borderRadius.m,
-  },
-  typeButtonActive: { backgroundColor: theme.colors.border },
-  typeText: { ...theme.typography.caption, color: theme.colors.textSecondary },
-  typeTextActive: { color: theme.colors.text, fontWeight: '600' },
-  inputContainer: { marginBottom: theme.spacing.xl },
-  label: {
-    ...theme.typography.caption,
-    color: theme.colors.textSecondary,
-    marginBottom: theme.spacing.s,
-    letterSpacing: 1,
-  },
-  amountInput: {
-    ...theme.typography.h1,
-    color: theme.colors.text,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-    paddingVertical: theme.spacing.s,
-  },
-  textInput: {
-    ...theme.typography.body,
-    color: theme.colors.text,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
-    paddingVertical: theme.spacing.s,
-  },
-  categorySelect: {
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.m,
-    padding: theme.spacing.m,
-    backgroundColor: theme.colors.surface,
-  },
-  categorySelectText: { ...theme.typography.body, color: theme.colors.primary },
-  categoryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  catChip: {
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.m,
-    paddingHorizontal: theme.spacing.m,
-    paddingVertical: theme.spacing.s,
-  },
-  catChipText: { ...theme.typography.caption, color: theme.colors.text },
-  saveButton: {
-    backgroundColor: theme.colors.primary,
-    paddingVertical: theme.spacing.m,
-    alignItems: 'center',
-    borderRadius: theme.borderRadius.m,
-    marginTop: 'auto',
-    marginBottom: theme.spacing.xxl,
-  },
-  saveButtonText: {
-    ...theme.typography.body,
-    color: '#FFF',
-    fontWeight: '600',
-    letterSpacing: 1,
-  },
+const makeStyles = (theme) => StyleSheet.create({
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: theme.spacing.l },
+  title: { ...theme.font.h1, color: theme.colors.text },
+  amountBox: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: theme.spacing.xxl },
+  amountInput: { ...theme.font.amountXL, fontSize: 52, minWidth: 80, textAlign: 'center', padding: 0 },
+  currency: { ...theme.font.amountXL, fontSize: 40, marginLeft: 6 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap' },
+  dateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: theme.colors.surface, borderRadius: theme.radius.m, borderWidth: 1, borderColor: theme.colors.border, paddingHorizontal: theme.spacing.s, minHeight: 56 },
+  dateText: { ...theme.font.body, color: theme.colors.text, fontWeight: '700', textTransform: 'capitalize' },
+  todayLink: { ...theme.font.caption, color: theme.colors.primary, marginTop: 2 },
 });
