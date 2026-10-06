@@ -1,8 +1,7 @@
 name: Build iOS IPA
 
 on:
-  push:
-    branches: [ main, master ]
+  # Manual: Actions > (este workflow) > Run workflow. Evita compilar en cada push.
   workflow_dispatch:
 
 concurrency:
@@ -18,6 +17,18 @@ jobs:
       EXPO_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.EXPO_PUBLIC_SUPABASE_ANON_KEY }}
       EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
     steps:
+      - name: Comprobar secretos de la app
+        run: |
+          missing=""
+          [ -z "$EXPO_PUBLIC_SUPABASE_URL" ] && missing="$missing EXPO_PUBLIC_SUPABASE_URL"
+          [ -z "$EXPO_PUBLIC_SUPABASE_ANON_KEY" ] && missing="$missing EXPO_PUBLIC_SUPABASE_ANON_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Faltan secretos en Settings > Secrets and variables > Actions:$missing"
+            exit 1
+          fi
+          [ -z "$EXPO_PUBLIC_API_URL" ] && echo "::warning::EXPO_PUBLIC_API_URL no definido: el asistente de IA no funcionará en la app"
+          exit 0
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
