@@ -203,6 +203,18 @@ export const Sheet = ({ visible, onClose, title, children }) => {
   );
 };
 
+/** Confirmación dentro de la app (más fiable que el Alert nativo en modales). */
+export const ConfirmSheet = ({ visible, title, message, confirmLabel, cancelLabel, danger = true, busy, onConfirm, onCancel }) => {
+  const { theme } = useSettings();
+  return (
+    <Sheet visible={visible} onClose={onCancel} title={title}>
+      {message ? <Text style={{ ...theme.font.body, color: theme.colors.textSecondary, marginBottom: theme.spacing.xl }}>{message}</Text> : null}
+      <Button title={confirmLabel} variant={danger ? 'danger' : 'primary'} onPress={onConfirm} loading={busy} />
+      <Button title={cancelLabel} variant="secondary" onPress={onCancel} style={{ marginTop: theme.spacing.m }} />
+    </Sheet>
+  );
+};
+
 export const Banner = ({ text, tone = 'warning' }) => {
   const { theme } = useSettings();
   return (

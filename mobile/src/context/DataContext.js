@@ -131,9 +131,13 @@ const SupabaseDataProvider = ({ children }) => {
   }, []);
 
   const deleteTransaction = useCallback(async (id) => {
-    check(await supabase.from('transactions').delete().eq('id', id));
+    const rows = check(await supabase.from('transactions').delete().eq('id', id).select('id'));
+    if (!rows || rows.length === 0) {
+      await load(true);
+      throw new Error('No se pudo eliminar: el movimiento ya no existe o no tienes permiso.');
+    }
     setData((d) => ({ ...d, transactions: d.transactions.filter((t) => t.id !== id) }));
-  }, []);
+  }, [load]);
 
   // ─── Categorías ───────────────────────────────────────────────────────────
   const addCategory = useCallback(async (cat) => {

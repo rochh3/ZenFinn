@@ -3,7 +3,7 @@ import { View, Text, TextInput, StyleSheet, KeyboardAvoidingView, Platform, Touc
 import { Alert } from '../utils/alert';
 import { useSettings, useStyles } from '../theme/SettingsContext';
 import { useData } from '../context/DataContext';
-import { Screen, Button, Chip, Label, Field, IconButton, Segmented, Icon } from '../components/ui';
+import { Screen, Button, Chip, Label, Field, IconButton, Segmented, Icon, ConfirmSheet } from '../components/ui';
 import { todayISO, addDays, friendlyDate, parseAmount } from '../utils/format';
 
 export const AddTransaction = ({ navigation, route }) => {
@@ -18,6 +18,7 @@ export const AddTransaction = ({ navigation, route }) => {
   const [categoryId, setCategoryId] = useState(editing?.categoryId || null);
   const [date, setDate] = useState(editing?.date || todayISO());
   const [busy, setBusy] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const isIncome = type === 'income';
   const tint = isIncome ? theme.colors.success : theme.colors.danger;
@@ -40,11 +41,20 @@ export const AddTransaction = ({ navigation, route }) => {
     }
   };
 
-  const remove = () =>
-    Alert.alert(t('deleteTxTitle'), t('deleteTxMsg'), [
-      { text: t('cancel'), style: 'cancel' },
-      { text: t('delete'), style: 'destructive', onPress: async () => { try { await deleteTransaction(editing.id); navigation.goBack(); } catch (e) { Alert.alert(t('error'), e.message); } } },
-    ]);
+  const remove = async () => {
+    const id = editing?.id;
+    if (!id) return;
+    setBusy(true);
+    try {
+      await deleteTransaction(id);
+      setConfirmOpen(false);
+      navigation.goBack();
+    } catch (e) {
+      setBusy(false);
+      setConfirmOpen(false);
+      Alert.alert(t('error'), e.message);
+    }
+  };
 
   return (
     <Screen edges={['top', 'bottom']}>
@@ -101,8 +111,19 @@ export const AddTransaction = ({ navigation, route }) => {
         <Field label={t('note')} value={note} onChangeText={setNote} placeholder={t('notePlaceholder')} maxLength={80} style={{ marginTop: theme.spacing.xl }} />
 
         <Button title={t('saveTransaction')} onPress={save} loading={busy} />
-        {editing && <Button title={t('delete')} variant="danger" icon="trash-outline" onPress={remove} style={{ marginTop: theme.spacing.m }} />}
+        {editing && <Button title={t('delete')} variant="danger" icon="trash-outline" onPress={() => setConfirmOpen(true)} style={{ marginTop: theme.spacing.m }} />}
       </KeyboardAvoidingView>
+
+      <ConfirmSheet
+        visible={confirmOpen}
+        title={t('deleteTxTitle')}
+        message={t('deleteTxMsg')}
+        confirmLabel={t('delete')}
+        cancelLabel={t('cancel')}
+        busy={busy}
+        onConfirm={remove}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </Screen>
   );
 };
